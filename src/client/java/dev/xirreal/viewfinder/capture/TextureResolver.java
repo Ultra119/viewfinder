@@ -59,7 +59,10 @@ public class TextureResolver {
             if ("shadowtex1".equals(name)) return glId(shadows.getDepthTextureNoTranslucents());
             if (name.startsWith("shadowcolor")) {
                 try {
-                    return shadows.getColorTextureId(Integer.parseInt(name.substring("shadowcolor".length())));
+                    int index = Integer.parseInt(name.substring("shadowcolor".length()));
+                    if (index >= 0 && index < shadows.getNumColorTextures() && shadows.get(index) != null) {
+                        return shadows.getColorTextureId(index);
+                    }
                 } catch (NumberFormatException | IndexOutOfBoundsException ignored) {}
             }
         }
@@ -140,7 +143,11 @@ public class TextureResolver {
         if (shadows != null) {
             addNamedTexture(shadowArray, "shadowtex0", glId(shadows.getDepthTexture()));
             addNamedTexture(shadowArray, "shadowtex1", glId(shadows.getDepthTextureNoTranslucents()));
-            for (int i = 0; i < shadows.getNumColorTextures(); i++) addNamedTexture(shadowArray, "shadowcolor" + i, shadows.getColorTextureId(i));
+            for (int i = 0; i < shadows.getNumColorTextures(); i++) {
+                if (shadows.get(i) != null) {
+                    addNamedTexture(shadowArray, "shadowcolor" + i, shadows.getColorTextureId(i));
+                }
+            }
         }
         result.add("shadow", shadowArray);
 

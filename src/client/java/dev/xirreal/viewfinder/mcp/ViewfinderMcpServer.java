@@ -324,10 +324,12 @@ public final class ViewfinderMcpServer {
       return URLDecoder.decode(uri.substring(prefix.length()), StandardCharsets.UTF_8);
    }
 
+   private static final com.google.gson.Gson PRETTY_GSON = new com.google.gson.GsonBuilder().setPrettyPrinting().create();
+
    private static String summary(JsonObject result) {
       if (result.has("message")) return result.get("message").getAsString();
       if (result.has("error")) return result.get("error").getAsString();
-      return "Viewfinder operation completed";
+      return PRETTY_GSON.toJson(result);
    }
 
    private static String rootMessage(Throwable error) {
