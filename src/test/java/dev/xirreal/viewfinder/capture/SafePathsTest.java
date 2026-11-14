@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 class SafePathsTest {
    @Test
    void resolvesInsideRoot() {
-      Path root = Path.of("/tmp/viewfinder-test");
+      Path root = Path.of("/tmp/viewfinder-test").toAbsolutePath().normalize();
       assertEquals(root.resolve("capture/output.png"), SafePaths.resolve(root, "capture/output.png"));
    }
 

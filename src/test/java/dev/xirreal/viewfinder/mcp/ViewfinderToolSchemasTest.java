@@ -100,4 +100,27 @@ class ViewfinderToolSchemasTest {
       org.junit.jupiter.api.Assertions.assertEquals("text/x-nvidia-assembly", resource.mimeType());
       org.junit.jupiter.api.Assertions.assertEquals("!!NVpseudo assembly", resource.text());
    }
+
+   @Test
+   void inspectAndDumpTextureParametersAreValidated() {
+      Map<String, Object> inspectSchema = ViewfinderToolSchemas.input("inspect_texture");
+      assertDoesNotThrow(() -> ViewfinderToolSchemas.validate(inspectSchema, Map.of(
+         "id", 1, "slice", 5, "axis", "Z", "voxelSummary", true), "inspect texture"));
+      assertDoesNotThrow(() -> ViewfinderToolSchemas.validate(inspectSchema, Map.of(
+         "name", "colortex0", "axis", "Y"), "inspect texture"));
+      assertThrows(IllegalArgumentException.class, () -> ViewfinderToolSchemas.validate(inspectSchema, Map.of(
+         "id", 1, "axis", "W"), "inspect texture"));
+
+      Map<String, Object> dumpSchema = ViewfinderToolSchemas.input("dump_texture");
+      assertDoesNotThrow(() -> ViewfinderToolSchemas.validate(dumpSchema, Map.ofEntries(
+         Map.entry("id", 1), Map.entry("slice", 2), Map.entry("axis", "X"), Map.entry("format", "hdr"),
+         Map.entry("toneMap", "exposure"), Map.entry("exposure", 2.5),
+         Map.entry("vectorRemap", true), Map.entry("heatmap", "turbo"),
+         Map.entry("maxHeatmapSteps", 128.0), Map.entry("nanMask", true), Map.entry("palette", true)
+      ), "dump texture"));
+      assertThrows(IllegalArgumentException.class, () -> ViewfinderToolSchemas.validate(dumpSchema, Map.of(
+         "id", 1, "format", "bmp"), "dump texture"));
+      assertThrows(IllegalArgumentException.class, () -> ViewfinderToolSchemas.validate(dumpSchema, Map.of(
+         "id", 1, "exposure", 0.0), "dump texture"));
+   }
 }

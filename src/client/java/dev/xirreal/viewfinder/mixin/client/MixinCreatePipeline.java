@@ -1,6 +1,7 @@
 package dev.xirreal.viewfinder.mixin.client;
 
 import dev.xirreal.viewfinder.Viewfinder;
+import dev.xirreal.viewfinder.capture.GLDebugCallbackHandler;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -10,6 +11,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public class MixinCreatePipeline {
 	@Inject(method = "createPipeline(Lnet/irisshaders/iris/shaderpack/materialmap/NamespacedId;)Lnet/irisshaders/iris/pipeline/WorldRenderingPipeline;", at = @At("RETURN"), remap = false)
 	private static void viewfinder$onCreatePipeline(CallbackInfoReturnable<?> cir) {
+		GLDebugCallbackHandler.init();
 		Object pipeline = cir.getReturnValue();
 		if (pipeline != null && pipeline.getClass().getSimpleName().equals("VanillaRenderingPipeline")) {
 			Viewfinder.LOGGER.warn("Iris fell back to VanillaRenderingPipeline, shader compilation likely failed");

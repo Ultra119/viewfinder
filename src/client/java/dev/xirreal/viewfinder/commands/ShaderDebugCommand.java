@@ -12,12 +12,16 @@ import dev.xirreal.viewfinder.Viewfinder;
 import dev.xirreal.viewfinder.ViewfinderClient;
 import dev.xirreal.viewfinder.capture.DiagnosticsSnapshot;
 import dev.xirreal.viewfinder.capture.ErrorCapture;
+import dev.xirreal.viewfinder.capture.ProgramRegistry;
 import dev.xirreal.viewfinder.capture.SSBODumper;
 import dev.xirreal.viewfinder.capture.SSBOInspector;
 import dev.xirreal.viewfinder.capture.SSBOResolver;
 import dev.xirreal.viewfinder.capture.TextureDumper;
 import dev.xirreal.viewfinder.capture.TextureInspector;
 import dev.xirreal.viewfinder.capture.TextureResolver;
+import dev.xirreal.viewfinder.temporal.ConvergenceProfiler;
+import dev.xirreal.viewfinder.temporal.FreezeController;
+import dev.xirreal.viewfinder.temporal.HistoryController;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -190,16 +194,31 @@ public class ShaderDebugCommand {
                      ClientCommands.literal("inspect").then(
                         ClientCommands.argument("index", IntegerArgumentType.integer(0))
                            .executes(ctx -> {
-                              printSsboInspection(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "index"), SSBOInspector.defaultPreviewBytes());
+                              printSsboInspection(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "index"), 0, SSBOInspector.defaultPreviewBytes());
                               return 1;
                            })
                            .then(
-                              ClientCommands.argument("bytes", IntegerArgumentType.integer(1)).executes(ctx -> {
-                                 printSsboInspection(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "index"), IntegerArgumentType.getInteger(ctx, "bytes"));
-                                 return 1;
-                              })
+                              ClientCommands.argument("bytes", IntegerArgumentType.integer(1))
+                                 .executes(ctx -> {
+                                    printSsboInspection(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "index"), 0, IntegerArgumentType.getInteger(ctx, "bytes"));
+                                    return 1;
+                                 })
+                                 .then(
+                                    ClientCommands.argument("offset", IntegerArgumentType.integer(0))
+                                       .executes(ctx -> {
+                                          printSsboInspection(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "index"), IntegerArgumentType.getInteger(ctx, "offset"), IntegerArgumentType.getInteger(ctx, "bytes"));
+                                          return 1;
+                                       })
+                                 )
                            )
                      )
+                  )
+                  .then(
+                     ClientCommands.literal("scan")
+                        .then(ClientCommands.argument("index", IntegerArgumentType.integer(0)).executes(ctx -> {
+                           executeSsboScan(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "index"));
+                           return 1;
+                        }))
                   )
             )
             .then(
@@ -361,6 +380,101 @@ public class ShaderDebugCommand {
                   return 1;
                })
             )
+            .then(
+               ClientCommands.literal("history")
+                  .then(
+                     ClientCommands.literal("flush").executes(ctx -> {
+                        int flushed = HistoryController.flushHistory();
+                        ChatFeedback.success(ctx.getSource(), "Flushed " + flushed + " history texture(s)");
+                        return 1;
+                     })
+                  )
+            )
+            .then(
+               ClientCommands.literal("freeze")
+                  .then(
+                     ClientCommands.literal("status").executes(ctx -> {
+                        ChatFeedback.info(ctx.getSource(), "Camera: " + FreezeController.isCameraFrozen() + ", Jitter: " + FreezeController.isJitterFrozen());
+                        return 1;
+                     })
+                  )
+                  .then(
+                     ClientCommands.literal("camera")
+                        .then(ClientCommands.argument("state", BoolArgumentType.bool()).executes(ctx -> {
+                           boolean state = BoolArgumentType.getBool(ctx, "state");
+                           FreezeController.setCameraFrozen(state);
+                           ChatFeedback.success(ctx.getSource(), "Camera freeze set to " + state);
+                           return 1;
+                        }))
+                  )
+                  .then(
+                     ClientCommands.literal("jitter")
+                        .then(ClientCommands.argument("state", BoolArgumentType.bool()).executes(ctx -> {
+                           boolean state = BoolArgumentType.getBool(ctx, "state");
+                           FreezeController.setJitterFrozen(state);
+                           ChatFeedback.success(ctx.getSource(), "Jitter freeze set to " + state);
+                           return 1;
+                        }))
+                  )
+                  .then(
+                     ClientCommands.literal("all")
+                        .then(ClientCommands.argument("state", BoolArgumentType.bool()).executes(ctx -> {
+                           boolean state = BoolArgumentType.getBool(ctx, "state");
+                           FreezeController.setAllFrozen(state);
+                           ChatFeedback.success(ctx.getSource(), "All freeze set to " + state);
+                           return 1;
+                        }))
+                  )
+            )
+            .then(
+               ClientCommands.literal("convergence")
+                  .executes(ctx -> executeConvergence(ctx.getSource(), 30))
+                  .then(ClientCommands.argument("frames", IntegerArgumentType.integer(2, 600))
+                     .executes(ctx -> executeConvergence(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "frames"))))
+            )
+            .then(
+               ClientCommands.literal("compute")
+                  .then(ClientCommands.literal("list").executes(ctx -> executeComputeList(ctx.getSource())))
+                  .then(ClientCommands.literal("inspect")
+                     .then(ClientCommands.argument("name", StringArgumentType.word())
+                        .executes(ctx -> executeComputeInspect(ctx.getSource(), StringArgumentType.getString(ctx, "name")))))
+                  .then(ClientCommands.literal("profile")
+                     .executes(ctx -> captureMetrics(ctx.getSource(), 60))
+                     .then(ClientCommands.argument("frames", IntegerArgumentType.integer(1, 600))
+                        .executes(ctx -> captureMetrics(ctx.getSource(), IntegerArgumentType.getInteger(ctx, "frames")))))
+            )
+            .then(
+               ClientCommands.literal("voxel")
+                  .then(ClientCommands.literal("name")
+                     .then(ClientCommands.argument("name", StringArgumentType.word())
+                        .executes(ctx -> executeVoxelDiagnostics(ctx.getSource(), StringArgumentType.getString(ctx, "name"), -1))))
+                  .then(ClientCommands.literal("id")
+                     .then(ClientCommands.argument("id", IntegerArgumentType.integer(1))
+                        .executes(ctx -> executeVoxelDiagnostics(ctx.getSource(), null, IntegerArgumentType.getInteger(ctx, "id")))))
+                  .then(ClientCommands.literal("slice")
+                     .then(ClientCommands.argument("name", StringArgumentType.word())
+                        .then(ClientCommands.argument("axis", StringArgumentType.word())
+                           .then(ClientCommands.argument("slice", IntegerArgumentType.integer(0))
+                              .executes(ctx -> executeVoxelSlice(
+                                 ctx.getSource(),
+                                 StringArgumentType.getString(ctx, "name"),
+                                 StringArgumentType.getString(ctx, "axis"),
+                                 IntegerArgumentType.getInteger(ctx, "slice")
+                              ))))))
+            )
+            .then(
+               ClientCommands.literal("program")
+                  .then(ClientCommands.literal("list").executes(ctx -> {
+                     printProgramList(ctx.getSource());
+                     return 1;
+                  }))
+                  .then(ClientCommands.literal("inspect")
+                     .then(ClientCommands.argument("name", StringArgumentType.word()).executes(ctx -> {
+                        executeProgramInspect(ctx.getSource(), StringArgumentType.getString(ctx, "name"));
+                        return 1;
+                     }))
+                  )
+            )
       );
    }
 
@@ -373,6 +487,12 @@ public class ShaderDebugCommand {
       ChatFeedback.commandHint(source, "/viewfinder screenshot", "capture the next frame");
       ChatFeedback.commandHint(source, "/viewfinder texture list", "textures");
       ChatFeedback.commandHint(source, "/viewfinder ssbo list", "shader buffers");
+      ChatFeedback.commandHint(source, "/viewfinder history flush", "flush history textures");
+      ChatFeedback.commandHint(source, "/viewfinder freeze", "camera & jitter freeze controls");
+      ChatFeedback.commandHint(source, "/viewfinder convergence", "profile frame RMSE convergence");
+      ChatFeedback.commandHint(source, "/viewfinder compute list", "compute shaders");
+      ChatFeedback.commandHint(source, "/viewfinder voxel name <name>", "voxel grid diagnostics");
+      ChatFeedback.commandHint(source, "/viewfinder program list", "shader programs");
       ChatFeedback.commandHint(source, "/viewfinder snapshot", "full diagnostics");
    }
 
@@ -661,7 +781,11 @@ public class ShaderDebugCommand {
    }
 
    private static void printSsboInspection(FabricClientCommandSource source, int index, int bytes) {
-      JsonObject result = SSBOInspector.inspectIndex(index, bytes);
+      printSsboInspection(source, index, 0, bytes);
+   }
+
+   private static void printSsboInspection(FabricClientCommandSource source, int index, int offset, int bytes) {
+      JsonObject result = SSBOInspector.inspectIndex(index, offset, bytes);
       if (result.has("error")) {
          ChatFeedback.error(source, jsonString(result, "error", "Failed to inspect SSBO"));
          ChatFeedback.commandHint(source, "/viewfinder ssbo list", "List active SSBO indices");
@@ -672,6 +796,9 @@ public class ShaderDebugCommand {
       ChatFeedback.row(source, "Index", String.valueOf(index));
       ChatFeedback.row(source, "GL id", String.valueOf(jsonInt(result, "bufferId", -1)));
       ChatFeedback.row(source, "Size", ChatFeedback.formatBytes(jsonLong(result, "totalBytes", 0L)));
+      if (offset > 0) {
+         ChatFeedback.row(source, "Offset", ChatFeedback.formatBytes(offset));
+      }
       ChatFeedback.row(source, "Inspected", ChatFeedback.formatBytes(jsonLong(result, "inspectedBytes", 0L)) + (jsonBoolean(result, "truncated", false) ? " (truncated)" : ""));
       ChatFeedback.row(source, "MCP", "inspect_ssbo");
 
@@ -692,6 +819,221 @@ public class ShaderDebugCommand {
                "min " + formatDouble(jsonDouble(floatStats, "min", 0.0)) + ", max " + formatDouble(jsonDouble(floatStats, "max", 0.0)) + ", avg " + formatDouble(jsonDouble(floatStats, "avg", 0.0))
             );
          }
+      }
+   }
+
+   private static int executeSsboScan(FabricClientCommandSource source, int index) {
+      try {
+         JsonObject result = SSBOInspector.scanIndex(index);
+         if (result.has("error")) {
+            ChatFeedback.error(source, jsonString(result, "error", "Failed to scan SSBO"));
+            return 1;
+         }
+
+         ChatFeedback.header(source, "SSBO NaN/Inf Scan");
+         ChatFeedback.row(source, "Index", String.valueOf(index));
+         ChatFeedback.row(source, "Buffer ID", String.valueOf(jsonInt(result, "bufferId", -1)));
+         ChatFeedback.row(source, "Total Floats", String.valueOf(jsonLong(result, "totalFloats", 0L)));
+         ChatFeedback.row(source, "Finite", String.valueOf(jsonLong(result, "finiteCount", 0L)));
+         long nans = jsonLong(result, "nanCount", 0L);
+         long infs = jsonLong(result, "infiniteCount", 0L);
+
+         if (nans > 0) {
+            ChatFeedback.error(source, "NaNs detected: " + nans + " (first at byte " + jsonLong(result, "firstNanByteOffset", -1L) + ")");
+         } else {
+            ChatFeedback.row(source, "NaNs", "0");
+         }
+
+         if (infs > 0) {
+            ChatFeedback.warning(source, "Infinities: " + infs + " (+Inf: " + jsonLong(result, "positiveInfCount", 0L) + ", -Inf: " + jsonLong(result, "negativeInfCount", 0L) + ", first at byte " + jsonLong(result, "firstInfByteOffset", -1L) + ")");
+         } else {
+            ChatFeedback.row(source, "Infs", "0");
+         }
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Failed to scan SSBO: " + ChatFeedback.exceptionMessage(e));
+      }
+      return 1;
+   }
+
+   private static int executeConvergence(FabricClientCommandSource source, int frames) {
+      try {
+         ChatFeedback.info(source, "Profiling convergence over " + frames + " frames...");
+         ConvergenceProfiler.profileConvergence(frames).thenAccept(res -> {
+            ChatFeedback.header(source, "Convergence Profile");
+            ChatFeedback.row(source, "Frames", String.valueOf(res.framesProfiled()));
+            ChatFeedback.row(source, "Initial RMSE", formatDouble(res.initialRmse()));
+            ChatFeedback.row(source, "Final RMSE", formatDouble(res.finalRmse()));
+            ChatFeedback.row(source, "Converging", res.isConverging() ? "yes" : "no");
+         }).exceptionally(ex -> {
+            ChatFeedback.error(source, "Convergence profiling failed: " + (ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+            return null;
+         });
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Could not start convergence profile: " + ChatFeedback.exceptionMessage(e));
+      }
+      return 1;
+   }
+
+   private static int executeComputeList(FabricClientCommandSource source) {
+      try {
+         JsonObject list = ProgramRegistry.listPrograms();
+         JsonArray programs = list.getAsJsonArray("programs");
+         ChatFeedback.header(source, "Compute Programs");
+         int count = 0;
+         if (programs != null) {
+            for (JsonElement el : programs) {
+               JsonObject prog = el.getAsJsonObject();
+               int id = prog.get("id").getAsInt();
+               if (ProgramRegistry.isCompute(id)) {
+                  count++;
+                  String name = prog.get("name").getAsString();
+                  MutableComponent line = Component.literal(name).withStyle(ChatFormatting.AQUA)
+                     .append(" (id " + id + ") ")
+                     .append(ChatFeedback.suggestButton("inspect", "/viewfinder compute inspect " + name));
+                  ChatFeedback.listItem(source, line);
+               }
+            }
+         }
+         if (count == 0) {
+            ChatFeedback.warning(source, "No active compute programs registered");
+         }
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Failed to list compute programs: " + ChatFeedback.exceptionMessage(e));
+      }
+      return 1;
+   }
+
+   private static int executeComputeInspect(FabricClientCommandSource source, String name) {
+      try {
+         int id = ProgramRegistry.resolve(name);
+         JsonObject result = ProgramRegistry.inspect(id);
+         ChatFeedback.header(source, "Compute Program: " + name);
+         ChatFeedback.row(source, "ID", String.valueOf(id));
+         ChatFeedback.row(source, "Linked", String.valueOf(jsonBoolean(result, "linked", false)));
+         if (result.has("compute")) {
+            JsonObject comp = result.getAsJsonObject("compute");
+            ChatFeedback.row(source, "WorkGroup", comp.get("workGroupSizeX") + "x" + comp.get("workGroupSizeY") + "x" + comp.get("workGroupSizeZ") + " (" + comp.get("workGroupInvocations") + " invocations)");
+         }
+         if (result.has("bufferVariables")) {
+            JsonArray vars = result.getAsJsonArray("bufferVariables");
+            ChatFeedback.row(source, "Buffer Vars", vars.size() + " variable(s)");
+            for (int i = 0; i < Math.min(8, vars.size()); i++) {
+               JsonObject v = vars.get(i).getAsJsonObject();
+               ChatFeedback.listItem(source, Component.literal(jsonString(v, "name", "") + " : " + jsonString(v, "typeName", "") + " (offset " + jsonInt(v, "offset", 0) + ", stride " + jsonInt(v, "arrayStride", 0) + ")"));
+            }
+         }
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Failed to inspect compute program: " + ChatFeedback.exceptionMessage(e));
+      }
+      return 1;
+   }
+
+   private static int executeVoxelDiagnostics(FabricClientCommandSource source, String name, int id) {
+      try {
+         JsonObject result;
+         if (name != null) {
+            result = TextureInspector.inspectByName(name, 1, -1, -1, 0, null, "Z", true);
+         } else {
+            result = TextureInspector.inspectTexture(id, 1, -1, -1, 0, null, "Z", true);
+         }
+         if (result.has("error")) {
+            ChatFeedback.error(source, jsonString(result, "error", "Failed to inspect voxel texture"));
+            return 1;
+         }
+         ChatFeedback.header(source, "Voxel Grid Diagnostics" + (name != null ? ": " + name : " (id " + id + ")"));
+         ChatFeedback.row(source, "Size", jsonInt(result, "width", 0) + "x" + jsonInt(result, "height", 0) + "x" + jsonInt(result, "depth", 1));
+         if (result.has("voxelSummary")) {
+            JsonObject summary = result.getAsJsonObject("voxelSummary");
+            ChatFeedback.row(source, "Total Voxels", String.valueOf(jsonLong(summary, "totalVoxels", 0L)));
+            ChatFeedback.row(source, "Occupied", String.valueOf(jsonLong(summary, "occupiedVoxels", 0L)));
+            double ratio = jsonDouble(summary, "occupancyRatio", 0.0);
+            ChatFeedback.row(source, "Occupancy", String.format(Locale.ROOT, "%.2f%%", ratio * 100.0));
+            if (summary.has("boundingBox")) {
+               JsonObject aabb = summary.getAsJsonObject("boundingBox");
+               ChatFeedback.row(source, "AABB min", "[" + jsonInt(aabb, "minX", 0) + ", " + jsonInt(aabb, "minY", 0) + ", " + jsonInt(aabb, "minZ", 0) + "]");
+               ChatFeedback.row(source, "AABB max", "[" + jsonInt(aabb, "maxX", 0) + ", " + jsonInt(aabb, "maxY", 0) + ", " + jsonInt(aabb, "maxZ", 0) + "]");
+            }
+            if (summary.has("histogram")) {
+               JsonArray hist = summary.getAsJsonArray("histogram");
+               ChatFeedback.row(source, "Block IDs", hist.size() + " unique");
+            }
+         }
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Failed to run voxel diagnostics: " + ChatFeedback.exceptionMessage(e));
+      }
+      return 1;
+   }
+
+   private static int executeVoxelSlice(FabricClientCommandSource source, String name, String axis, int slice) {
+      int textureId = TextureResolver.resolveTexture(name);
+      if (textureId == -1) {
+         ChatFeedback.error(source, "Unknown texture: " + name);
+         return 1;
+      }
+      String outputDir = Minecraft.getInstance().gameDirectory.toPath().resolve("texture_dumps").toString();
+      String outputPath = outputDir + File.separator + name + "_slice_" + axis + "_" + slice + ".png";
+      try {
+         TextureDumper.DumpOptions opts = new TextureDumper.DumpOptions(
+            slice, axis, "png", "none", 1.0f, false, "none", 256.0f, false, true
+         );
+         JsonObject result = TextureDumper.dumpTexture(textureId, outputPath, opts);
+         if (result.has("error")) {
+            ChatFeedback.error(source, "Failed to dump voxel slice: " + jsonString(result, "error", "unknown error"));
+         } else {
+            ChatFeedback.success(source, "Voxel slice dumped: " + name + " (" + axis + "=" + slice + ")");
+            ChatFeedback.pathRow(source, "Output", jsonString(result, "path", outputPath));
+         }
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Failed to dump voxel slice: " + ChatFeedback.exceptionMessage(e));
+      }
+      return 1;
+   }
+
+   private static void printProgramList(FabricClientCommandSource source) {
+      try {
+         JsonObject list = ProgramRegistry.listPrograms();
+         JsonArray progs = list.getAsJsonArray("programs");
+         ChatFeedback.header(source, "Shader Programs (" + jsonInt(list, "count", 0) + ")");
+         if (progs != null) {
+            for (JsonElement el : progs) {
+               JsonObject p = el.getAsJsonObject();
+               int id = p.get("id").getAsInt();
+               String name = p.get("name").getAsString();
+               boolean isComp = ProgramRegistry.isCompute(id);
+               MutableComponent line = Component.literal(name).withStyle(isComp ? ChatFormatting.AQUA : ChatFormatting.WHITE)
+                  .append(" (id " + id + (isComp ? ", compute" : "") + ") ")
+                  .append(ChatFeedback.suggestButton("inspect", "/viewfinder program inspect " + name));
+               ChatFeedback.listItem(source, line);
+            }
+         }
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Failed to list programs: " + ChatFeedback.exceptionMessage(e));
+      }
+   }
+
+   private static void executeProgramInspect(FabricClientCommandSource source, String name) {
+      try {
+         int id = ProgramRegistry.resolve(name);
+         JsonObject result = ProgramRegistry.inspect(id);
+         ChatFeedback.header(source, "Program: " + name);
+         ChatFeedback.row(source, "ID", String.valueOf(id));
+         ChatFeedback.row(source, "Linked", String.valueOf(jsonBoolean(result, "linked", false)));
+         ChatFeedback.row(source, "Validated", String.valueOf(jsonBoolean(result, "validated", false)));
+         if (result.has("compute")) {
+            JsonObject comp = result.getAsJsonObject("compute");
+            ChatFeedback.row(source, "WorkGroup", comp.get("workGroupSizeX") + "x" + comp.get("workGroupSizeY") + "x" + comp.get("workGroupSizeZ") + " (" + comp.get("workGroupInvocations") + " invocations)");
+         }
+         if (result.has("uniforms")) {
+            ChatFeedback.row(source, "Uniforms", String.valueOf(result.getAsJsonArray("uniforms").size()));
+         }
+         if (result.has("shaderStorageBlocks")) {
+            ChatFeedback.row(source, "SSBO Blocks", String.valueOf(result.getAsJsonArray("shaderStorageBlocks").size()));
+         }
+         if (result.has("bufferVariables")) {
+            ChatFeedback.row(source, "Buffer Vars", String.valueOf(result.getAsJsonArray("bufferVariables").size()));
+         }
+      } catch (Exception e) {
+         ChatFeedback.error(source, "Failed to inspect program: " + ChatFeedback.exceptionMessage(e));
       }
    }
 

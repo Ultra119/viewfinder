@@ -9,7 +9,11 @@ import com.mojang.renderpearl.backend.opengl.GlTexture;
 *//*?}*/
 import dev.xirreal.viewfinder.mixin.client.IrisRenderingPipelineAccessor;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import net.irisshaders.iris.Iris;
+import net.irisshaders.iris.gl.image.GlImage;
 import net.irisshaders.iris.gl.texture.TextureAccess;
 import net.irisshaders.iris.pipeline.CustomTextureManager;
 import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
@@ -82,6 +86,16 @@ public class TextureResolver {
             TextureAccess noise = customTexMgr.getNoiseTexture();
             if (noise != null) {
                 return noise.getTextureId().getAsInt();
+            }
+        }
+
+        // Try custom images
+        Set<GlImage> customImages = accessor.getCustomImages();
+        if (customImages != null) {
+            for (GlImage image : customImages) {
+                if (name.equals(image.getName()) || (image.getSamplerName() != null && name.equals(image.getSamplerName()))) {
+                    return image.getId();
+                }
             }
         }
 
@@ -159,6 +173,29 @@ public class TextureResolver {
 
         TextureAccess noise = customTexMgr.getNoiseTexture();
         if (noise != null) addNamedTexture(customArray, "noisetex", noise.getTextureId().getAsInt());
+
+        // Custom images
+        JsonArray imagesArray = new JsonArray();
+        Set<GlImage> customImages = accessor.getCustomImages();
+        if (customImages != null) {
+            for (GlImage image : customImages) {
+                JsonObject img = new JsonObject();
+                img.addProperty("name", image.getName());
+                img.addProperty("samplerName", image.getSamplerName() != null ? image.getSamplerName() : "");
+                img.addProperty("textureId", image.getId());
+                img.addProperty("target", image.getTarget() != null ? image.getTarget().getGlType() : 0);
+                img.addProperty("targetName", image.getTarget() != null ? image.getTarget().name() : "unknown");
+                String internalFormat = image.getInternalFormat() != null ? image.getInternalFormat().name() : "unknown";
+                img.addProperty("internalFormat", internalFormat);
+                addTextureMetadata(img, image.getId());
+                if (!img.has("width")) img.addProperty("width", 0);
+                if (!img.has("height")) img.addProperty("height", 0);
+                if (!img.has("depth")) img.addProperty("depth", 0);
+                img.addProperty("internalFormat", internalFormat);
+                imagesArray.add(img);
+            }
+        }
+        result.add("images", imagesArray);
 
         return result;
     }

@@ -13,7 +13,11 @@
       "MixinProgram",
       "MixinProgramBuilder",
       "MixinProgramCreator",
-      "IrisRenderingPipelineAccessor"
+      "IrisRenderingPipelineAccessor",
+      "MixinComputeProgram",
+      "MixinIrisRenderingPipeline",
+      "MixinIrisTime",
+      "MixinLevelRenderer"
    ],
    "injectors": {
       "defaultRequire": 1

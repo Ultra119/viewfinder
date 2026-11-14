@@ -1,5 +1,7 @@
 package dev.xirreal.viewfinder.mixin.client;
 
+import java.util.Set;
+import net.irisshaders.iris.gl.image.GlImage;
 import net.irisshaders.iris.pipeline.CustomTextureManager;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
@@ -16,4 +18,7 @@ public interface IrisRenderingPipelineAccessor {
 
    @Accessor("shadowRenderTargets")
    ShadowRenderTargets getShadowRenderTargets();
+
+   @Accessor("customImages")
+   Set<GlImage> getCustomImages();
 }

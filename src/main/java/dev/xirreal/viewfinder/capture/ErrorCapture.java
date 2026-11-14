@@ -12,10 +12,14 @@ public class ErrorCapture {
     private static final int MAX_ERRORS = 100;
     private final List<ErrorEntry> errors = new CopyOnWriteArrayList<>();
 
-    public void addError(String type, String filename, String message, String stackTrace) {
+    public synchronized void addError(String type, String filename, String message, String stackTrace) {
         errors.add(new ErrorEntry(type, filename, message, stackTrace, System.currentTimeMillis()));
-        if (errors.size() > MAX_ERRORS) {
-            errors.remove(0);
+        while (errors.size() > MAX_ERRORS) {
+            try {
+                errors.remove(0);
+            } catch (IndexOutOfBoundsException ignored) {
+                break;
+            }
         }
     }
 
@@ -23,7 +27,7 @@ public class ErrorCapture {
         return Collections.unmodifiableList(new ArrayList<>(errors));
     }
 
-    public void clearErrors() {
+    public synchronized void clearErrors() {
         errors.clear();
     }
 

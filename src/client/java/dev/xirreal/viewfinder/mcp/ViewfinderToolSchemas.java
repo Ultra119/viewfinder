@@ -68,6 +68,10 @@ final class ViewfinderToolSchemas {
          case "inspect_ssbo" -> schema(
             integerProperty("index", "Iris SSBO binding index", 0, null, null),
             integerProperty("bytes", "Preview byte count", 1, 64 * 1024, 256),
+            integerProperty("offset", "Byte offset within buffer to start inspection", 0, null, 0),
+            integerProperty("offsetBytes", "Byte offset within buffer to start inspection (alias for offset)", 0, null, 0),
+            integerProperty("lengthBytes", "Preview byte count (alias for bytes)", 1, 64 * 1024, null),
+            booleanProperty("scan", "Perform whole-buffer NaN/Inf scanning across SSBO floats", false),
             required("index"));
          case "dump_ssbo" -> schema(
             integerProperty("index", "Iris SSBO binding index", 0, null, null), required("index"));
@@ -144,7 +148,10 @@ final class ViewfinderToolSchemas {
          integerProperty("samples", "Maximum sampled pixels", 1, 1_000_000, 4096),
          integerProperty("x", "Pixel x; requires y", 0, null, null),
          integerProperty("y", "Pixel y; requires x", 0, null, null),
-         integerProperty("z", "Texture layer", 0, null, 0));
+         integerProperty("z", "Texture layer", 0, null, 0),
+         integerProperty("slice", "2D slice index along axis for 3D textures", 0, null, null),
+         enumProperty("axis", "Z", "Y", "X"),
+         booleanProperty("voxelSummary", "Compute voxel grid diagnostics summary (occupancy, AABB, histogram)", false));
       exactlyOne(schema, "name", "id");
       schema.put("dependentRequired", Map.of("x", List.of("y"), "y", List.of("x")));
       return schema;
@@ -154,7 +161,17 @@ final class ViewfinderToolSchemas {
       Map<String, Object> schema = schema(
          stringProperty("name", "Preferred: exact Iris texture name", true),
          integerProperty("id", "OpenGL texture id; use only when no Iris name exists", 1, null, null),
-         booleanProperty("raw", "Write raw bytes instead of PNG", false));
+         booleanProperty("raw", "Write raw bytes instead of PNG", false),
+         integerProperty("slice", "2D slice index along axis for 3D textures", 0, null, null),
+         enumProperty("axis", "Z", "Y", "X"),
+         enumProperty("format", "png", "hdr", "raw"),
+         enumProperty("toneMap", "none", "exposure"),
+         numberProperty("exposure", "Exposure multiplier for tone mapping (>0)", 0.0),
+         booleanProperty("vectorRemap", "Remap [-1, 1] vectors to [0, 255] RGB", false),
+         enumProperty("heatmap", "none", "turbo", "viridis"),
+         numberProperty("maxHeatmapSteps", "Maximum step count for heatmap normalization (>0)", 0.0),
+         booleanProperty("nanMask", "Highlight NaN (magenta) and Inf (cyan/yellow)", false),
+         booleanProperty("palette", "Use discrete golden ratio hash color palette for integer voxel IDs", false));
       exactlyOne(schema, "name", "id");
       return schema;
    }

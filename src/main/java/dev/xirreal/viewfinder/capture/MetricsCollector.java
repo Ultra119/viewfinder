@@ -16,6 +16,7 @@ public class MetricsCollector {
    private static final int RING_BUFFER_CAPACITY = 50;
 
    private final Deque<ActiveTiming> activeTimings = new ArrayDeque<>();
+   private final Deque<ActiveTiming> activeComputeTimings = new ArrayDeque<>();
    private final Queue<PendingTiming> pendingTimings = new ArrayDeque<>();
    private final Map<String, TimingRingBuffer> passTimings = Collections.synchronizedMap(new LinkedHashMap<>());
    private int framesRemaining;
@@ -51,13 +52,31 @@ public class MetricsCollector {
       pendingTimings.add(new PendingTiming(timing.name, timing.startQuery, endQuery));
    }
 
+   public void beginComputeTiming(String passName) {
+      if (framesRemaining <= 0) return;
+      int startQuery = GL33C.glGenQueries();
+      GL33C.glQueryCounter(startQuery, GL33C.GL_TIMESTAMP);
+      activeComputeTimings.push(new ActiveTiming(passName, startQuery));
+   }
+
+   public void endComputeTiming() {
+      ActiveTiming timing = activeComputeTimings.poll();
+      if (timing == null) {
+         return;
+      }
+
+      int endQuery = GL33C.glGenQueries();
+      GL33C.glQueryCounter(endQuery, GL33C.GL_TIMESTAMP);
+      pendingTimings.add(new PendingTiming(timing.name, timing.startQuery, endQuery));
+   }
+
    public void endFrame() {
       collectPending();
       if (framesRemaining > 0) {
          framesCaptured++;
          if (--framesRemaining == 0) captureEnding = true;
       }
-      if (!captureEnding || !activeTimings.isEmpty() || !pendingTimings.isEmpty()) return;
+      if (!captureEnding || !activeTimings.isEmpty() || !activeComputeTimings.isEmpty() || !pendingTimings.isEmpty()) return;
       CompletableFuture<JsonObject> done = capture;
       capture = null;
       captureEnding = false;
@@ -163,6 +182,11 @@ public class MetricsCollector {
       }
       activeTimings.clear();
 
+      for (ActiveTiming timing : activeComputeTimings) {
+         GL33C.glDeleteQueries(timing.startQuery);
+      }
+      activeComputeTimings.clear();
+
       for (PendingTiming timing : pendingTimings) {
          GL33C.glDeleteQueries(timing.startQuery);
          GL33C.glDeleteQueries(timing.endQuery);
@@ -248,7 +272,11 @@ public class MetricsCollector {
          return result;
       }
 
-      JsonObject toJson(boolean includeSamples) {
+      public JsonObject toJson() {
+         return toJson(true);
+      }
+
+      public JsonObject toJson(boolean includeSamples) {
          JsonObject result = new JsonObject();
          result.addProperty("sampleCount", count);
          result.addProperty("avg", getAverage());

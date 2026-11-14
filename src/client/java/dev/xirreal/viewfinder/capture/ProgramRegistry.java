@@ -7,19 +7,27 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL20C;
+import org.lwjgl.opengl.GL30C;
+import org.lwjgl.opengl.GL32C;
 import org.lwjgl.opengl.GL41C;
+import org.lwjgl.opengl.GL42C;
 import org.lwjgl.opengl.GL43C;
 
 public final class ProgramRegistry {
    private static final int MAX_BINARY_BYTES = 64 * 1024 * 1024;
    private static final int MAX_RECOVERY_PROGRAMS = 64;
    private static final Map<Integer, String> names = new LinkedHashMap<>();
+   private static final Set<Integer> computePrograms = Collections.synchronizedSet(new HashSet<>());
 
    private ProgramRegistry() {}
 
@@ -27,12 +35,26 @@ public final class ProgramRegistry {
       names.put(id, name);
    }
 
+   public static void registerCompute(int id) {
+      computePrograms.add(id);
+   }
+
+   public static boolean isCompute(int id) {
+      return computePrograms.contains(id);
+   }
+
+   public static synchronized String getName(int id) {
+      return names.get(id);
+   }
+
    public static synchronized void remove(int id) {
       names.remove(id);
+      computePrograms.remove(id);
    }
 
    public static synchronized void clear() {
       names.clear();
+      computePrograms.clear();
    }
 
    public static synchronized int resolve(String name) {
@@ -58,6 +80,7 @@ public final class ProgramRegistry {
    }
 
    public static JsonObject inspect(int id) {
+      if (id <= 0) throw new IllegalArgumentException("Unknown OpenGL program id: " + id);
       JsonObject result = new JsonObject();
       result.addProperty("programId", id);
       synchronized (ProgramRegistry.class) {
@@ -79,6 +102,34 @@ public final class ProgramRegistry {
       result.add("uniforms", uniforms(id));
       result.add("uniformBlocks", interfaces(id, GL43C.GL_UNIFORM_BLOCK));
       result.add("shaderStorageBlocks", interfaces(id, GL43C.GL_SHADER_STORAGE_BLOCK));
+      result.add("bufferVariables", bufferVariables(id));
+
+      if (isCompute(id)) {
+         try (MemoryStack stack = MemoryStack.stackPush()) {
+            java.nio.IntBuffer size = stack.mallocInt(3);
+            GL20C.glGetProgramiv(id, GL43C.GL_COMPUTE_WORK_GROUP_SIZE, size);
+            int x = size.get(0);
+            int y = size.get(1);
+            int z = size.get(2);
+            JsonObject compute = new JsonObject();
+            JsonArray dims = new JsonArray();
+            dims.add(x);
+            dims.add(y);
+            dims.add(z);
+            compute.add("workGroupDimensions", dims);
+            compute.addProperty("workGroupSizeX", x);
+            compute.addProperty("workGroupSizeY", y);
+            compute.addProperty("workGroupSizeZ", z);
+            compute.addProperty("workGroupInvocations", (long) x * y * z);
+            result.add("compute", compute);
+            result.add("workGroupDimensions", dims);
+            result.addProperty("workGroupSizeX", x);
+            result.addProperty("workGroupSizeY", y);
+            result.addProperty("workGroupSizeZ", z);
+            result.addProperty("workGroupInvocations", (long) x * y * z);
+         }
+      }
+
       return result;
    }
 
@@ -136,12 +187,45 @@ public final class ProgramRegistry {
    }
 
    public static JsonObject driverInfo() {
-      String vendor = string(GL11C.GL_VENDOR);
       JsonObject driver = new JsonObject();
-      driver.addProperty("vendor", vendor);
-      driver.addProperty("renderer", string(GL11C.GL_RENDERER));
-      driver.addProperty("openGlVersion", string(GL11C.GL_VERSION));
-      driver.addProperty("programBinaryDumpSupported", vendor.equals("NVIDIA Corporation"));
+      driver.addProperty("vendor", "unknown");
+      driver.addProperty("renderer", "unknown");
+      driver.addProperty("openGlVersion", "unknown");
+      driver.addProperty("programBinaryDumpSupported", false);
+
+      try {
+         String vendor = string(GL11C.GL_VENDOR);
+         driver.addProperty("vendor", vendor);
+         driver.addProperty("renderer", string(GL11C.GL_RENDERER));
+         driver.addProperty("openGlVersion", string(GL11C.GL_VERSION));
+         driver.addProperty("programBinaryDumpSupported", vendor.equals("NVIDIA Corporation"));
+
+         var caps = GL.getCapabilities();
+         if (caps.OpenGL43 || caps.GL_ARB_compute_shader) {
+            driver.addProperty("maxComputeWorkGroupInvocations", GL11C.glGetInteger(GL43C.GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS));
+            driver.addProperty("maxComputeSharedMemorySize", GL11C.glGetInteger(GL43C.GL_MAX_COMPUTE_SHARED_MEMORY_SIZE));
+            driver.addProperty("maxShaderStorageBlockSize", GL32C.glGetInteger64(GL43C.GL_MAX_SHADER_STORAGE_BLOCK_SIZE));
+            driver.addProperty("maxShaderStorageBufferBindings", GL11C.glGetInteger(GL43C.GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS));
+            driver.addProperty("maxComputeShaderStorageBlocks", GL11C.glGetInteger(GL43C.GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS));
+            driver.addProperty("maxCombinedShaderStorageBlocks", GL11C.glGetInteger(GL43C.GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS));
+            driver.addProperty("maxImageUnits", GL11C.glGetInteger(GL42C.GL_MAX_IMAGE_UNITS));
+            driver.addProperty("maxComputeImageUniforms", GL11C.glGetInteger(GL43C.GL_MAX_COMPUTE_IMAGE_UNIFORMS));
+
+            JsonArray count = new JsonArray();
+            count.add(GL30C.glGetIntegeri(GL43C.GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0));
+            count.add(GL30C.glGetIntegeri(GL43C.GL_MAX_COMPUTE_WORK_GROUP_COUNT, 1));
+            count.add(GL30C.glGetIntegeri(GL43C.GL_MAX_COMPUTE_WORK_GROUP_COUNT, 2));
+            driver.add("maxComputeWorkGroupCount", count);
+
+            JsonArray size = new JsonArray();
+            size.add(GL30C.glGetIntegeri(GL43C.GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0));
+            size.add(GL30C.glGetIntegeri(GL43C.GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1));
+            size.add(GL30C.glGetIntegeri(GL43C.GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2));
+            driver.add("maxComputeWorkGroupSize", size);
+         }
+      } catch (Throwable ignored) {
+         // Driver capabilities may not be queryable outside an active GL context
+      }
       return driver;
    }
 
@@ -196,5 +280,94 @@ public final class ProgramRegistry {
          result.add(block);
       }
       return result;
+   }
+
+   private static JsonArray bufferVariables(int program) {
+      JsonArray result = new JsonArray();
+      try {
+         var caps = GL.getCapabilities();
+         if (!caps.OpenGL43 && !caps.GL_ARB_program_interface_query) {
+            return result;
+         }
+         int count = GL43C.glGetProgramInterfacei(program, GL43C.GL_BUFFER_VARIABLE, GL43C.GL_ACTIVE_RESOURCES);
+         if (count <= 0) return result;
+
+         try (MemoryStack stack = MemoryStack.stackPush()) {
+            java.nio.IntBuffer props = stack.ints(
+               GL43C.GL_BLOCK_INDEX,
+               GL43C.GL_TYPE,
+               GL43C.GL_OFFSET,
+               GL43C.GL_ARRAY_SIZE,
+               GL43C.GL_ARRAY_STRIDE,
+               GL43C.GL_MATRIX_STRIDE
+            );
+            java.nio.IntBuffer params = stack.mallocInt(6);
+            java.nio.IntBuffer length = stack.mallocInt(1);
+
+            for (int index = 0; index < count; index++) {
+               String name = GL43C.glGetProgramResourceName(program, GL43C.GL_BUFFER_VARIABLE, index);
+               params.clear();
+               length.clear();
+               GL43C.glGetProgramResourceiv(program, GL43C.GL_BUFFER_VARIABLE, index, props, length, params);
+
+               int blockIndex = params.get(0);
+               int type = params.get(1);
+               int offset = params.get(2);
+               int arraySize = params.get(3);
+               int arrayStride = params.get(4);
+               int matrixStride = params.get(5);
+
+               String blockName = "";
+               if (blockIndex >= 0) {
+                  try {
+                     blockName = GL43C.glGetProgramResourceName(program, GL43C.GL_SHADER_STORAGE_BLOCK, blockIndex);
+                  } catch (Exception ignored) {
+                     blockName = "Block_" + blockIndex;
+                  }
+               }
+
+               JsonObject varObj = new JsonObject();
+               varObj.addProperty("name", name);
+               varObj.addProperty("blockIndex", blockIndex);
+               varObj.addProperty("blockName", blockName);
+               varObj.addProperty("type", type);
+               varObj.addProperty("typeName", glTypeName(type));
+               varObj.addProperty("offset", offset);
+               varObj.addProperty("arraySize", arraySize);
+               varObj.addProperty("arrayStride", arrayStride);
+               varObj.addProperty("matrixStride", matrixStride);
+               result.add(varObj);
+            }
+         }
+      } catch (Throwable ignored) {
+         // Driver or capability error in headless/unsupported environments
+      }
+      return result;
+   }
+
+   private static String glTypeName(int type) {
+      return switch (type) {
+         case GL11C.GL_FLOAT -> "float";
+         case GL20C.GL_FLOAT_VEC2 -> "vec2";
+         case GL20C.GL_FLOAT_VEC3 -> "vec3";
+         case GL20C.GL_FLOAT_VEC4 -> "vec4";
+         case GL11C.GL_INT -> "int";
+         case GL20C.GL_INT_VEC2 -> "ivec2";
+         case GL20C.GL_INT_VEC3 -> "ivec3";
+         case GL20C.GL_INT_VEC4 -> "ivec4";
+         case GL30C.GL_UNSIGNED_INT -> "uint";
+         case GL30C.GL_UNSIGNED_INT_VEC2 -> "uvec2";
+         case GL30C.GL_UNSIGNED_INT_VEC3 -> "uvec3";
+         case GL30C.GL_UNSIGNED_INT_VEC4 -> "uvec4";
+         case GL20C.GL_BOOL -> "bool";
+         case GL20C.GL_BOOL_VEC2 -> "bvec2";
+         case GL20C.GL_BOOL_VEC3 -> "bvec3";
+         case GL20C.GL_BOOL_VEC4 -> "bvec4";
+         case GL20C.GL_FLOAT_MAT2 -> "mat2";
+         case GL20C.GL_FLOAT_MAT3 -> "mat3";
+         case GL20C.GL_FLOAT_MAT4 -> "mat4";
+         case GL11C.GL_DOUBLE -> "double";
+         default -> "unknown (0x" + Integer.toHexString(type) + ")";
+      };
    }
 }

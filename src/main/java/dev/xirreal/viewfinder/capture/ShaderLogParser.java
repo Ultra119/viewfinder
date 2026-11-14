@@ -17,16 +17,24 @@ public final class ShaderLogParser {
       for (String line : log.lines().toList()) {
          Matcher colon = COLON.matcher(line.trim());
          if (colon.matches()) {
-            messages.add(new Message(colon.group(1).toLowerCase(), colon.group(2), Integer.parseInt(colon.group(3)), colon.group(4)));
+            messages.add(new Message(colon.group(1).toLowerCase(), colon.group(2), parseLineNumber(colon.group(3)), colon.group(4)));
             continue;
          }
          Matcher paren = PAREN.matcher(line.trim());
          if (paren.matches()) {
             String severity = paren.group(3) == null ? "error" : paren.group(3).toLowerCase();
-            messages.add(new Message(severity, paren.group(1), Integer.parseInt(paren.group(2)), paren.group(4)));
+            messages.add(new Message(severity, paren.group(1), parseLineNumber(paren.group(2)), paren.group(4)));
          }
       }
       return messages;
+   }
+
+   private static int parseLineNumber(String text) {
+      try {
+         return Integer.parseInt(text);
+      } catch (NumberFormatException e) {
+         return -1;
+      }
    }
 
    public record Message(String severity, String file, int line, String message) {}

@@ -318,8 +318,11 @@ final class ViewfinderOperations {
             int x = integer(arguments, "x", -1);
             int y = integer(arguments, "y", -1);
             int z = integer(arguments, "z", 0);
+            Integer slice = optionalInteger(arguments, "slice");
+            String axis = string(arguments, "axis", "Z");
+            boolean voxelSummary = bool(arguments, "voxelSummary", false);
             String name = string(arguments, "name", null);
-            JsonObject result = TextureInspector.inspectTexture(textureId(arguments), samples, x, y, z);
+            JsonObject result = TextureInspector.inspectTexture(textureId(arguments), samples, x, y, z, slice, axis, voxelSummary);
             if (name != null) result.addProperty("name", name);
             if (result.has("error")) addTextureChoices(result);
             return result;
@@ -335,9 +338,26 @@ final class ViewfinderOperations {
             String name = string(arguments, "name", null);
             int id = textureId(arguments);
             boolean raw = bool(arguments, "raw", false);
+            Integer slice = optionalInteger(arguments, "slice");
+            String axis = string(arguments, "axis", "Z");
+            String format = string(arguments, "format", raw ? "raw" : "png");
+            String toneMap = string(arguments, "toneMap", "none");
+            float exposure = (float) number(arguments, "exposure", 1.0);
+            boolean vectorRemap = bool(arguments, "vectorRemap", false);
+            String heatmap = string(arguments, "heatmap", "none");
+            float maxHeatmapSteps = (float) number(arguments, "maxHeatmapSteps", 64.0);
+            boolean nanMask = bool(arguments, "nanMask", false);
+            boolean palette = bool(arguments, "palette", false);
+
+            TextureDumper.DumpOptions options = new TextureDumper.DumpOptions(
+               slice, axis, format, toneMap, exposure, vectorRemap, heatmap, maxHeatmapSteps, nanMask, palette
+            );
+
             Path capture = CaptureStore.create("texture");
-            Path output = capture.resolve((name == null ? "texture-" + id : safeName(name)) + (raw ? ".bin" : ".png"));
-            JsonObject result = raw ? TextureDumper.dumpTextureRaw(id, output.toString()) : TextureDumper.dumpTexture(id, output.toString());
+            String ext = "raw".equalsIgnoreCase(format) ? ".bin" : "hdr".equalsIgnoreCase(format) ? ".hdr" : ".png";
+            Path output = capture.resolve((name == null ? "texture-" + id : safeName(name)) + ext);
+
+            JsonObject result = TextureDumper.dumpTexture(id, output.toString(), options);
             result.addProperty("captureId", capture.getFileName().toString());
             result.addProperty("resourceUri", "viewfinder://capture/" + capture.getFileName() + "/" + output.getFileName());
             if (name != null) result.addProperty("name", name);
@@ -353,7 +373,17 @@ final class ViewfinderOperations {
          int index = requiredInteger(arguments, "index");
          int id = SSBOResolver.resolveBufferId(index);
          if (id < 1) return ssboFailure("No SSBO found at index " + index);
-         return SSBOInspector.inspectBuffer(id, index, integer(arguments, "bytes", SSBOInspector.defaultPreviewBytes()));
+
+         int offset = integer(arguments, "offsetBytes", integer(arguments, "offset", 0));
+         int bytes = integer(arguments, "lengthBytes", integer(arguments, "bytes", SSBOInspector.defaultPreviewBytes()));
+         boolean scan = bool(arguments, "scan", false);
+
+         JsonObject result = SSBOInspector.inspectBuffer(id, index, offset, bytes);
+         if (scan) {
+            JsonObject scanResult = SSBOInspector.scanBuffer(id, index);
+            result.add("scan", scanResult);
+         }
+         return result;
       }, 10);
    }
 
@@ -927,6 +957,13 @@ final class ViewfinderOperations {
    private static int integer(Map<String, Object> values, String key, int fallback) {
       Object value = values.get(key);
       return value instanceof Number n ? n.intValue() : value == null ? fallback : Integer.parseInt(String.valueOf(value));
+   }
+
+   private static Integer optionalInteger(Map<String, Object> values, String key) {
+      Object value = values.get(key);
+      if (value == null) return null;
+      if (value instanceof Number n) return n.intValue();
+      return Integer.parseInt(String.valueOf(value));
    }
 
    private static int requiredInteger(Map<String, Object> values, String key) {
