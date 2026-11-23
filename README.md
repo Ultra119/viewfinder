@@ -9,6 +9,11 @@ A shader debugging mod for [Iris](https://irisshaders.dev/) on Fabric that expos
 - **Shaderpack and config switching** - list installed packs, select one, reset or apply options, and reload
 - **On-demand GPU profiles** - collect hierarchical per-pass timings over a fixed frame window without permanent query overhead
 - **Pipeline and program inspection** - observe nested Iris passes and reflect linked program uniforms, UBOs, and SSBOs
+- **RT / PT & compute shader diagnostics** - introspect compute workgroups, image units, memory barriers, and per-dispatch microsecond GPU timings
+- **3D texture & voxel grid analysis** - probe and dump slices along X/Y/Z with OpenGL 4.5/3.0 subvolume readback, golden-ratio hash palette colorization, and occupancy/bounding-box integrity metrics
+- **Structured SSBO introspection** - automatically reflect GLSL struct member names, types, offsets, and array strides via `GL_BUFFER_VARIABLE`, navigate arbitrary offsets, and scan for IEEE-754 NaNs/Infs
+- **HDR radiance & false-color heatmaps** - export pure Java 32-bit Radiance `.hdr` (RGBE) files, exposure tone mapping, Turbo/Viridis traversal heatmaps, and signed vector remapping
+- **Temporal controls & convergence profiling** - flush ping-pong history textures (`glClearTexImage`), freeze camera position and TAA subpixel jitter, and compute frame-to-frame RMSE convergence
 - **Texture dumping** - inspect or export main/alternate colortex, depth, shadow, noise, and custom textures
 - **SSBO buffer dumping** - dump shader storage buffer objects to disk for analysis
 - **Screenshot scheduling** - schedule screenshots with configurable frame delay (for PT)
@@ -20,6 +25,63 @@ A shader debugging mod for [Iris](https://irisshaders.dev/) on Fabric that expos
 - **Shader mutation** - edit directory-pack sources or options and reload with structured diagnostics
 - **Deterministic scenes** - position the authoritative singleplayer player, set time/weather, and freeze or step ticks
 - **Client render settings** - query or change render distance and base FOV, with the server-limited effective distance reported
+
+## RT / PT & Compute Shader Diagnostics
+
+Modern Minecraft ray tracing (RT) and path tracing (PT) shaderpacks (such as *Photon*, *SEUS PTGI*, *KappaPT*, and *Rethinking Voxels*) operate on a compute-centric, volumetric, and temporal architecture. Viewfinder provides dedicated diagnostics to inspect these pipelines and pinpoint bugs that traditional raster debuggers miss.
+
+### What Can Be Inspected
+
+1. **Compute Programs & Workgroups**:
+   - Workgroup dimensions $(X, Y, Z)$ and total invocations per workgroup (`GL_COMPUTE_WORK_GROUP_SIZE`) via `inspect_program` and `/viewfinder compute inspect <name>`.
+   - Bound OpenGL image units (`glBindImageTexture`) and custom compute images (`customImages`) via `list_textures` and `inspect_texture`.
+   - Compute pass output attachments and SSBO writes captured atomically with memory barrier synchronization (`glMemoryBarrier`).
+   - Per-dispatch microsecond GPU timings via non-blocking timestamp queries (`glQueryCounter(GL_TIMESTAMP)`).
+
+2. **3D Textures & Voxel Grids**:
+   - Subvolume and 2D slice readback (`slice: int`, `axis: "Z" | "Y" | "X"`) via OpenGL 4.5 `glGetTextureSubImage` and GL 3.0 scratch FBO layer fallback, eliminating out-of-memory skips on large $256^3$ voxel volumes.
+   - Deterministic golden-ratio hash palette colorization for integer voxel channels (`R32UI`, `RGBA16UI`), mapping discrete block IDs to distinct colors instead of destructive grayscale normalization.
+   - Voxel grid integrity metrics: **Occupancy Ratio** (% non-empty voxels), **Active Bounding Box** ($[x_{min}, y_{min}, z_{min}] \to [x_{max}, y_{max}, z_{max}]$), and **Block ID Frequency Histogram**.
+
+3. **Structured SSBOs & Acceleration Structures**:
+   - Zero-schema struct reflection via OpenGL 4.3 `GL_BUFFER_VARIABLE` program interface queries (`glGetProgramInterfaceiv`, `glGetProgramResourceiv`), automatically reporting struct member names, types, byte offsets, and array strides directly from compiled shaders.
+   - Arbitrary offset and length navigation (`offsetBytes`, `lengthBytes`) via `inspect_ssbo` to traverse deep BVH node trees, light lists, or ReSTIR reservoir arrays.
+   - Whole-buffer bitwise scans across SSBOs to locate and count IEEE-754 `NaN`, `+Infinity`, `-Infinity`, and subnormal values.
+
+4. **High Dynamic Range (HDR) Radiance & Heatmaps**:
+   - Pure Java Greg Ward 32-bit Radiance `.hdr` (RGBE) export with scanline RLE compression, preserving extreme radiance values ($0.0$ to $10{,}000+$ lux) without 8-bit clipping.
+   - Radiance exposure tone mapping previews ($1.0 - e^{-\text{radiance} \cdot \text{exposure}}$).
+   - Signed vector remapping ($\frac{V + 1.0}{2.0} \times 255$) for normal buffers and screen motion vectors.
+   - Perceptually uniform false-color heatmaps (*Turbo* and *Viridis*) for ray step counts, DDA iterations, and BVH node visit counts.
+   - Binary NaN/Infinity highlight masks to pinpoint firefly pixel coordinates.
+
+5. **Temporal Accumulation, Reprojection & Denoising**:
+   - Ping-pong history buffer flushing (`/viewfinder history flush`) using `glClearTexImage` to reset `colortexN_alt` and custom history images to zero, isolating 1-SPP raw Monte Carlo noise from accumulated bias.
+   - Deterministic transform freeze: `/viewfinder freeze camera` locks modelview/projection matrices, while `/viewfinder freeze jitter` cancels TAA/PT subpixel jitter.
+   - Convergence profiler (`/viewfinder convergence [frames]`): computes frame-to-frame Root Mean Squared Error (RMSE) across multi-frame accumulation to measure denoiser (SVGF/A-trous) convergence rates.
+
+6. **Driver Hardware Limits & OpenGL Error Trapping**:
+   - Driver debug message interception via `glDebugMessageCallback` / KHR_debug piped directly into `ErrorCapture`, surfacing silent compute dispatch and out-of-bounds errors.
+   - Hardware compute limits reported in `driverInfo`: `maxComputeWorkGroupInvocations`, `maxComputeSharedMemorySize`, `maxShaderStorageBlockSize`, `maxShaderStorageBufferBindings`, `maxComputeShaderStorageBlocks`, `maxImageUnits`, `maxComputeWorkGroupSize`, and `maxComputeWorkGroupCount`.
+
+---
+
+### What Bugs & Issues Can Be Detected
+
+| Bug / Issue Category | Symptoms in Game | How to Detect with Viewfinder |
+|---|---|---|
+| **Voxelization Drift / Freeze** | Shadows or GI don't update when walking; voxels lag behind player | Inspect `/viewfinder voxel name <name>`: verify whether the `boundingBox` updates its world-coordinate offset as the player moves. |
+| **Empty or Solid-Leak Voxel Grids** | Completely missing GI/shadows, or world engulfed in solid shadow | Run `/viewfinder voxel name <name>`: check `occupancyRatio`. $0.0$ indicates voxelization pass failed completely; $1.0$ indicates a leak or solid fill. |
+| **Block ID Mapping Failures** | Modded or unexpected blocks have incorrect emissive, reflective, or transparency properties | Inspect voxel slices with `/viewfinder voxel slice <name> Z <layer>`. Golden-ratio hash palette colorizes IDs discretely. Check `topBlockIds` histogram to spot unmapped ID 0/air replacements. |
+| **NaN / Infinity Firefly Contamination** | Blown-out bright pixels spreading across the screen or permanently poisoning history | Run `/viewfinder ssbo scan <index>` to count buffer NaNs. Dump textures with `mode: "nan_mask"` to locate exact $(X, Y)$ pixel coordinates of mathematical singularities. |
+| **Ray Traversal Infinite Loops** | Severe framerate drops in specific biomes, angles, or cave entrances | Dump step-count textures using `mode: "heatmap"` and `colorRamp: "turbo"`. Highlights pixels reaching maximum traversal iterations in bright red. |
+| **Driver Workgroup Overflow** | Compute shaders fail to dispatch; black screen on specific GPUs | Query `/viewfinder compute inspect <name>` and compare `invocationsPerWorkGroup` against `maxComputeWorkGroupInvocations` in `driverInfo`. |
+| **Shared Memory Exhaustion** | Silent compile or dispatch failures on low-end or non-NVIDIA GPUs | Compare declared compute `shared` variables against `maxComputeSharedMemorySize` in `driverInfo`. |
+| **SSBO Struct Padding Mismatches** | Scrambled light lists, corrupt BVH nodes, incorrect colors | Inspect `bufferVariables` in `inspect_program`: compare driver-reported struct field offsets and array strides against shader declarations (`std430` vs `std140`). |
+| **TAA Ghosting vs Reprojection Error** | Smearing and trails behind moving blocks or entities | Run `/viewfinder freeze jitter true`: if smearing persists, the bug is in the velocity motion vector scaling or reprojection matrix; if it disappears, jitter phase is misaligned. |
+| **Denoiser Convergence Stalling** | Noisy speckled image never cleans up even when standing still | Run `/viewfinder convergence 60`: if RMSE stabilizes at a high plateau instead of exponentially decaying towards zero, spatial/temporal weights are rejecting valid samples. |
+| **History Buffer Poisoning** | Old lighting changes or ghost entities linger across scene resets | Execute `/viewfinder history flush` to reset accumulators to zero without reloading the entire shaderpack. |
+| **HDR Radiance Clipping** | Lighting appears washed out, flat white, or details in sun/fire are lost | Dump textures using `format: "hdr"` and inspect raw floating-point radiance values in tev/Photoshop, or use `mode: "exposure"` with custom exposure values. |
 
 ## Installation
 
@@ -57,15 +119,30 @@ All commands are registered under `/viewfinder`:
 | `/viewfinder metrics capture [frames]` | Profile the next fixed number of frames |
 | `/viewfinder metrics reset` | Clear collected GPU timing samples |
 | `/viewfinder ssbo list` | List active SSBO buffers |
-| `/viewfinder ssbo inspect <index> [bytes]` | Preview SSBO bytes as hex, int, uint, and float values |
+| `/viewfinder ssbo inspect <index> [bytes] [offset]` | Preview SSBO bytes as hex, int, uint, and float values with optional offset |
+| `/viewfinder ssbo scan <index>` | Scan SSBO buffer for IEEE-754 NaNs, Infs, and subnormals |
 | `/viewfinder ssbo dump <index>` | Dump an SSBO buffer to `ssbo_dumps/` |
-| `/viewfinder texture list` | List available colortex and custom textures |
+| `/viewfinder program list` | List all linked Iris shader programs |
+| `/viewfinder program inspect <name>` | Reflect uniforms, UBOs, SSBOs, and compute workgroup parameters |
+| `/viewfinder compute list` | List compute programs, workgroup dimensions, and invocation counts |
+| `/viewfinder compute inspect <name>` | Inspect a specific compute shader program's workgroups and uniforms |
+| `/viewfinder compute profile [frames]` | Profile per-dispatch compute shader GPU execution timings |
+| `/viewfinder voxel name <name>` | Report voxel occupancy ratio, active bounding box, and block ID histogram |
+| `/viewfinder voxel id <id>` | Report voxel diagnostics by OpenGL texture id |
+| `/viewfinder voxel slice <name> <axis> <slice>` | Inspect a 2D slice of a 3D texture along X, Y, or Z |
+| `/viewfinder texture list` | List available colortex, depth, shadow, and custom compute images |
 | `/viewfinder texture inspect name <name> [samples]` | Probe texture metadata, samples, and channel statistics by name |
 | `/viewfinder texture inspect id <id> [samples]` | Probe texture metadata, samples, and channel statistics by GL id |
 | `/viewfinder texture sample name <name> <x> <y> [z]` | Read a specific texture pixel by name |
 | `/viewfinder texture sample id <id> <x> <y> [z]` | Read a specific texture pixel by GL id |
-| `/viewfinder texture dump name <name> [raw]` | Dump a texture by name (PNG or raw) |
-| `/viewfinder texture dump id <id> [raw]` | Dump a texture by GL id (PNG or raw) |
+| `/viewfinder texture dump name <name> [raw]` | Dump a texture by name (PNG, HDR RGBE, or raw) |
+| `/viewfinder texture dump id <id> [raw]` | Dump a texture by GL id (PNG, HDR RGBE, or raw) |
+| `/viewfinder history flush` | Flush ping-pong colortex history buffers and custom history images |
+| `/viewfinder freeze status` | Show current camera transform and subpixel jitter freeze states |
+| `/viewfinder freeze camera <true\|false>` | Freeze camera transform matrix to isolate static reprojection |
+| `/viewfinder freeze jitter <true\|false>` | Freeze subpixel TAA/PT projection jitter |
+| `/viewfinder freeze all <true\|false>` | Freeze both camera position and subpixel jitter |
+| `/viewfinder convergence [frames]` | Measure multi-frame Monte Carlo RMSE convergence rate |
 | `/viewfinder patched_shaders` | List Iris patched shader files |
 
 Chat output uses clickable controls where Minecraft supports them: dumped file paths can be opened or copied, list output includes dump command suggestions, and captured errors include copy buttons for full messages and stack traces.
